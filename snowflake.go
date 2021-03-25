@@ -3,9 +3,7 @@ package snowflake
 import (
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strconv"
-	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -13,6 +11,8 @@ import (
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/migrator"
 	"gorm.io/gorm/schema"
+
+	_ "github.com/snowflakedb/gosnowflake"
 )
 
 type Dialector struct {
@@ -110,56 +110,31 @@ func (dialector Dialector) Migrator(db *gorm.DB) gorm.Migrator {
 }
 
 func (dialector Dialector) BindVarTo(writer clause.Writer, stmt *gorm.Statement, v interface{}) {
-	writer.WriteString("@p")
-	writer.WriteString(strconv.Itoa(len(stmt.Vars)))
+	writer.WriteByte('?')
 }
 
-//n correct double quotes, can not use . within identifier eventhough snowflake allows
+//no quotes, quotes cause everything needing quotes
 func (dialector Dialector) QuoteTo(writer clause.Writer, str string) {
-	writer.WriteByte('"')
-	if strings.Contains(str, ".") {
-		for idx, str := range strings.Split(str, ".") {
-			if idx > 0 {
-				writer.WriteString(`."`)
-			}
-			writer.WriteString(str)
-			writer.WriteByte('"')
-		}
-	} else {
-		writer.WriteString(str)
-		writer.WriteByte('"')
-	}
+	writer.WriteString(str)
 }
-
-var numericPlaceholder = regexp.MustCompile("@p(\\d+)")
 
 func (dialector Dialector) Explain(sql string, vars ...interface{}) string {
-	for idx, v := range vars {
-		if b, ok := v.(bool); ok {
-			if b {
-				vars[idx] = 1
-			} else {
-				vars[idx] = 0
-			}
-		}
-	}
-
-	return logger.ExplainSQL(sql, numericPlaceholder, `'`, vars...)
+	return logger.ExplainSQL(sql, nil, `'`, vars...)
 }
 
 func (dialector Dialector) DataTypeOf(field *schema.Field) string {
 	switch field.DataType {
 	case schema.Bool:
-		return "bit"
+		return "BOOLEAN"
 	case schema.Int, schema.Uint:
 		var sqlType string
 		switch {
 		case field.Size < 16:
-			sqlType = "smallint"
+			sqlType = "SMALLINT"
 		case field.Size < 31:
-			sqlType = "int"
+			sqlType = "INT"
 		default:
-			sqlType = "bigint"
+			sqlType = "BIGINT"
 		}
 
 		if field.AutoIncrement {
@@ -167,7 +142,7 @@ func (dialector Dialector) DataTypeOf(field *schema.Field) string {
 		}
 		return sqlType
 	case schema.Float:
-		return "float"
+		return "FLOAT"
 	case schema.String:
 		size := field.Size
 		hasIndex := field.TagSettings["INDEX"] != "" || field.TagSettings["UNIQUE"] != ""
@@ -175,20 +150,19 @@ func (dialector Dialector) DataTypeOf(field *schema.Field) string {
 			size = 256
 		}
 		if size > 0 && size <= 4000 {
-			return fmt.Sprintf("nvarchar(%d)", size)
+			return fmt.Sprintf("VARCHAR(%d)", size)
 		}
-		return "nvarchar(MAX)"
+		return "VARCHAR"
 	case schema.Time:
-		return "datetimeoffset"
+		return "TIMESTAMP_TZ"
 	case schema.Bytes:
-		return "varbinary(MAX)"
+		return "VARBINARY"
 	}
 
 	return string(field.DataType)
 }
 
 // no support for savepoint
-// https://docs.snowflake.com/en/sql-reference/transactions.html
 func (dialectopr Dialector) SavePoint(tx *gorm.DB, name string) error {
 	return nil
 }

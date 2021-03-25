@@ -42,33 +42,6 @@ func Create(db *gorm.DB) {
 		if hasConflict {
 			MergeCreate(db, onConflict, values)
 		} else {
-			setIdentityInsert := false
-
-			if db.Statement.Schema != nil {
-				if field := db.Statement.Schema.PrioritizedPrimaryField; field != nil && field.AutoIncrement {
-					switch db.Statement.ReflectValue.Kind() {
-					case reflect.Struct:
-						_, isZero := field.ValueOf(db.Statement.ReflectValue)
-						setIdentityInsert = !isZero
-					case reflect.Slice, reflect.Array:
-						for i := 0; i < db.Statement.ReflectValue.Len(); i++ {
-							obj := db.Statement.ReflectValue.Index(i)
-							if reflect.Indirect(obj).Kind() == reflect.Struct {
-								_, isZero := field.ValueOf(db.Statement.ReflectValue.Index(i))
-								setIdentityInsert = !isZero
-							}
-							break
-						}
-					}
-
-					if setIdentityInsert {
-						db.Statement.WriteString("SET IDENTITY_INSERT ")
-						db.Statement.WriteQuoted(db.Statement.Table)
-						db.Statement.WriteString(" ON;")
-					}
-				}
-			}
-
 			db.Statement.AddClauseIfNotExists(clause.Insert{})
 			db.Statement.Build("INSERT")
 			db.Statement.WriteByte(' ')
@@ -85,8 +58,6 @@ func Create(db *gorm.DB) {
 					}
 					db.Statement.WriteByte(')')
 
-					outputInserted(db)
-
 					db.Statement.WriteString(" VALUES ")
 
 					for idx, value := range values.Values {
@@ -101,21 +72,22 @@ func Create(db *gorm.DB) {
 
 					db.Statement.WriteString(";")
 				} else {
-					db.Statement.WriteString("DEFAULT VALUES;")
+					// only one autoincrement column
+					db.Statement.WriteString("VALUES (DEFAULT);")
 				}
-			}
-
-			if setIdentityInsert {
-				db.Statement.WriteString("SET IDENTITY_INSERT ")
-				db.Statement.WriteQuoted(db.Statement.Table)
-				db.Statement.WriteString(" OFF;")
 			}
 		}
 	}
 
 	if !db.DryRun && db.Error == nil {
+		result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
+		if db.AddError(err) == nil {
+			db.RowsAffected, _ = result.RowsAffected()
+		}
+
 		if len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
-			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
+			insertedSQL := "SELECT * FROM harumphs CHANGES(INFORMATION => DEFAULT) BEFORE(statement=>LAST_QUERY_ID());"
+			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, insertedSQL)
 
 			if err == nil {
 				defer rows.Close()
@@ -163,11 +135,6 @@ func Create(db *gorm.DB) {
 				db.AddError(rows.Err())
 			} else {
 				db.AddError(err)
-			}
-		} else {
-			result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
-			if db.AddError(err) == nil {
-				db.RowsAffected, _ = result.RowsAffected()
 			}
 		}
 	}
@@ -240,19 +207,5 @@ func MergeCreate(db *gorm.DB, onConflict clause.OnConflict, values clause.Values
 	}
 
 	db.Statement.WriteString(")")
-	outputInserted(db)
 	db.Statement.WriteString(";")
-}
-
-func outputInserted(db *gorm.DB) {
-	if db.Statement.Schema != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
-		db.Statement.WriteString(" OUTPUT")
-		for idx, field := range db.Statement.Schema.FieldsWithDefaultDBValue {
-			if idx > 0 {
-				db.Statement.WriteString(",")
-			}
-			db.Statement.WriteString(" INSERTED.")
-			db.Statement.AddVar(db.Statement, clause.Column{Name: field.DBName})
-		}
-	}
 }

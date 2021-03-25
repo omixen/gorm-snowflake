@@ -7,7 +7,7 @@ require (
 	github.com/golang/protobuf v1.4.3 // indirect
 	github.com/google/flatbuffers v1.12.0 // indirect
 	github.com/pkg/browser v0.0.0-20201207095918-0426ae3fba23 // indirect
-	github.com/snowflakedb/gosnowflake v1.3.12 // indirect
+	github.com/snowflakedb/gosnowflake v1.3.12
 	golang.org/x/crypto v0.0.0-20201217014255-9d1352758620 // indirect
 	golang.org/x/net v0.0.0-20201216054612-986b41b23924 // indirect
 	golang.org/x/sys v0.0.0-20201218084310-7d0127a74742 // indirect
