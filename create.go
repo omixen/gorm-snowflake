@@ -1,11 +1,13 @@
 package snowflake
 
 import (
+	"log"
 	"reflect"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 func Create(db *gorm.DB) {
@@ -45,8 +47,8 @@ func Create(db *gorm.DB) {
 			db.Statement.AddClauseIfNotExists(clause.Insert{})
 			db.Statement.Build("INSERT")
 			db.Statement.WriteByte(' ')
-
 			db.Statement.AddClause(values)
+			log.Printf("INSERTO: %s\n", db.Statement.SQL.String())
 			if values, ok := db.Statement.Clauses["VALUES"].Expression.(clause.Values); ok {
 				if len(values.Columns) > 0 {
 					db.Statement.WriteByte('(')
@@ -80,49 +82,80 @@ func Create(db *gorm.DB) {
 	}
 
 	if !db.DryRun && db.Error == nil {
-		result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
-		if db.AddError(err) == nil {
+		db.RowsAffected = 0
+
+		// exec the insert first
+		if result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...); err == nil {
 			db.RowsAffected, _ = result.RowsAffected()
+		} else {
+			_ = db.AddError(err)
 		}
 
-		if len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
-			insertedSQL := "SELECT * FROM harumphs CHANGES(INFORMATION => DEFAULT) BEFORE(statement=>LAST_QUERY_ID());"
-			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, insertedSQL)
+		// select the last inserted values
+		if sch := db.Statement.Schema; sch != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
+			var (
+				fields = make([]*schema.Field, len(sch.FieldsWithDefaultDBValue))
+				values = make([]interface{}, len(sch.FieldsWithDefaultDBValue))
+			)
 
+			db.Statement.SQL.Reset()
+			db.Statement.WriteString("SELECT ")
+			// populate fields
+			for idx, field := range sch.FieldsWithDefaultDBValue {
+				//fmt.Printf("DEFAUS: %+v\n", field)
+				if idx > 0 {
+					db.Statement.WriteByte(',')
+				}
+
+				fields[idx] = field
+				db.Statement.WriteQuoted(field.DBName)
+			}
+			db.Statement.WriteString(" FROM ")
+			db.Statement.WriteQuoted(db.Statement.Table)
+			db.Statement.WriteString(" CHANGES(INFORMATION => DEFAULT) BEFORE(statement=>LAST_QUERY_ID());")
+			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
+			db.RowsAffected = 0 // reset rows affected
 			if err == nil {
 				defer rows.Close()
 
-				values := make([]interface{}, len(db.Statement.Schema.FieldsWithDefaultDBValue))
-
 				switch db.Statement.ReflectValue.Kind() {
 				case reflect.Slice, reflect.Array:
-					var hasPrimaryValues, nonePrimaryValues []int
-					for i := 0; i < db.Statement.ReflectValue.Len(); i++ {
-						obj := db.Statement.ReflectValue.Index(i)
-						if reflect.Indirect(obj).Kind() != reflect.Struct {
-							return
-						}
-
-						if _, isZero := db.Statement.Schema.PrioritizedPrimaryField.ValueOf(obj); isZero {
-							nonePrimaryValues = append(nonePrimaryValues, i)
-						} else {
-							hasPrimaryValues = append([]int{i}, hasPrimaryValues...)
-						}
-					}
+					c := db.Statement.Clauses["ON CONFLICT"]
+					onConflict, _ := c.Expression.(clause.OnConflict)
 
 					for rows.Next() {
-						if int(db.RowsAffected) < len(nonePrimaryValues) {
-							for idx, field := range db.Statement.Schema.FieldsWithDefaultDBValue {
-								fieldValue := field.ReflectValueOf(db.Statement.ReflectValue.Index(nonePrimaryValues[db.RowsAffected]))
-								values[idx] = fieldValue.Addr().Interface()
+					BEGIN:
+						reflectValue := db.Statement.ReflectValue.Index(int(db.RowsAffected))
+						if reflect.Indirect(reflectValue).Kind() != reflect.Struct {
+							break
+						}
+
+						for idx, field := range fields {
+							fieldValue := field.ReflectValueOf(reflectValue)
+
+							if onConflict.DoNothing && !fieldValue.IsZero() {
+								db.RowsAffected++
+
+								if int(db.RowsAffected) >= db.Statement.ReflectValue.Len() {
+									return
+								}
+
+								goto BEGIN
 							}
 
-							db.AddError(rows.Scan(values...))
+							values[idx] = fieldValue.Addr().Interface()
 						}
+
 						db.RowsAffected++
+						if err := rows.Scan(values...); err != nil {
+							_ = db.AddError(err)
+						}
 					}
 				case reflect.Struct:
-					for idx, field := range db.Statement.Schema.FieldsWithDefaultDBValue {
+					//log.Println("ITS A STRUCT")
+					//log.Printf("FIELDS: %+v\n", fields)
+					//log.Printf("VALUES: %+v\n", values)
+					for idx, field := range fields {
 						values[idx] = field.ReflectValueOf(db.Statement.ReflectValue).Addr().Interface()
 					}
 
@@ -131,8 +164,6 @@ func Create(db *gorm.DB) {
 						db.AddError(rows.Scan(values...))
 					}
 				}
-
-				db.AddError(rows.Err())
 			} else {
 				db.AddError(err)
 			}

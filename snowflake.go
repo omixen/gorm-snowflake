@@ -3,7 +3,9 @@ package snowflake
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strconv"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -13,6 +15,10 @@ import (
 	"gorm.io/gorm/schema"
 
 	_ "github.com/snowflakedb/gosnowflake"
+)
+
+const (
+	SnowflakeDriverName = "snowflake"
 )
 
 type Dialector struct {
@@ -26,11 +32,16 @@ type Config struct {
 }
 
 func (dialector Dialector) Name() string {
-	return "snowflake"
+	return SnowflakeDriverName
 }
 
 func Open(dsn string) gorm.Dialector {
-	return &Dialector{Config: &Config{DSN: dsn}}
+	return &Dialector{
+		Config: &Config{
+			DSN:        dsn,
+			DriverName: SnowflakeDriverName,
+		},
+	}
 }
 
 func New(config Config) gorm.Dialector {
@@ -38,13 +49,13 @@ func New(config Config) gorm.Dialector {
 }
 
 func (dialector Dialector) Initialize(db *gorm.DB) (err error) {
-
+	log.Println("creating connection...")
 	// register callbacks
 	callbacks.RegisterDefaultCallbacks(db, &callbacks.Config{})
-	db.Callback().Create().Replace("gorm:create", Create)
+	_ = db.Callback().Create().Replace("gorm:create", Create)
 
 	if dialector.DriverName == "" {
-		dialector.DriverName = "snowflake"
+		dialector.DriverName = SnowflakeDriverName
 	}
 
 	if dialector.Conn != nil {
@@ -154,7 +165,7 @@ func (dialector Dialector) DataTypeOf(field *schema.Field) string {
 		}
 		return "VARCHAR"
 	case schema.Time:
-		return "TIMESTAMP_TZ"
+		return "TIMESTAMP_NTZ"
 	case schema.Bytes:
 		return "VARBINARY"
 	}
@@ -170,4 +181,46 @@ func (dialectopr Dialector) SavePoint(tx *gorm.DB, name string) error {
 func (dialectopr Dialector) RollbackTo(tx *gorm.DB, name string) error {
 	tx.Exec("ROLLBACK TRANSACTION " + name)
 	return nil
+}
+
+// NamingStrategy for snowflake (always uppercase)
+type NamingStrategy struct {
+	defaultNS *schema.NamingStrategy
+}
+
+// NewNamingStrategy create new instance of snowflake naming strat
+func NewNamingStrategy() *NamingStrategy {
+	return &NamingStrategy{
+		defaultNS: &schema.NamingStrategy{},
+	}
+}
+
+// ColumnName snowflake edition
+func (sns NamingStrategy) ColumnName(table, column string) string {
+	return strings.ToUpper(sns.defaultNS.ColumnName(table, column))
+}
+
+// TableName snowflake edition
+func (sns NamingStrategy) TableName(table string) string {
+	return sns.defaultNS.TableName(table)
+}
+
+// JoinTableName snowflake edition
+func (sns NamingStrategy) JoinTableName(joinTable string) string {
+	return sns.defaultNS.JoinTableName(joinTable)
+}
+
+// RelationshipFKName snowflake edition
+func (sns NamingStrategy) RelationshipFKName(rel schema.Relationship) string {
+	return sns.defaultNS.RelationshipFKName(rel)
+}
+
+// CheckerName snowflake edition
+func (sns NamingStrategy) CheckerName(table, column string) string {
+	return sns.defaultNS.CheckerName(table, column)
+}
+
+// IndexName snowflake edition
+func (sns NamingStrategy) IndexName(table, column string) string {
+	return sns.defaultNS.IndexName(table, column)
 }
