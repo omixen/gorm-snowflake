@@ -1,5 +1,5 @@
 # gorm-snowflake
-Snowflake driver for gorm
+Snowflake driver for [gorm](https://gorm.io/)
 
 ## Snowflake Features
 
