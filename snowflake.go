@@ -114,9 +114,8 @@ func (dialector Dialector) DefaultValueOf(field *schema.Field) clause.Expression
 
 func (dialector Dialector) Migrator(db *gorm.DB) gorm.Migrator {
 	return Migrator{migrator.Migrator{Config: migrator.Config{
-		DB:                          db,
-		Dialector:                   dialector,
-		CreateIndexAfterCreateTable: true,
+		DB:        db,
+		Dialector: dialector,
 	}}}
 }
 

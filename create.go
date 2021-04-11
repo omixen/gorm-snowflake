@@ -1,7 +1,6 @@
 package snowflake
 
 import (
-	"log"
 	"reflect"
 
 	"gorm.io/gorm"
@@ -48,7 +47,7 @@ func Create(db *gorm.DB) {
 			db.Statement.Build("INSERT")
 			db.Statement.WriteByte(' ')
 			db.Statement.AddClause(values)
-			log.Printf("INSERTO: %s\n", db.Statement.SQL.String())
+
 			if values, ok := db.Statement.Clauses["VALUES"].Expression.(clause.Values); ok {
 				if len(values.Columns) > 0 {
 					db.Statement.WriteByte('(')
@@ -84,14 +83,15 @@ func Create(db *gorm.DB) {
 	if !db.DryRun && db.Error == nil {
 		db.RowsAffected = 0
 
-		// exec the insert first
+		// exec the merge/insert first
 		if result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...); err == nil {
 			db.RowsAffected, _ = result.RowsAffected()
 		} else {
 			_ = db.AddError(err)
 		}
 
-		// select the last inserted values
+		// do another select on last inserted values to populate default values (e.g. ID)
+		// this relies on the result of SELECT * FROM CHANGES to align with the order of the VALUES in MERGE statement
 		if sch := db.Statement.Schema; sch != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
 			var (
 				fields = make([]*schema.Field, len(sch.FieldsWithDefaultDBValue))
@@ -99,10 +99,11 @@ func Create(db *gorm.DB) {
 			)
 
 			db.Statement.SQL.Reset()
+
+			// write select
 			db.Statement.WriteString("SELECT ")
 			// populate fields
 			for idx, field := range sch.FieldsWithDefaultDBValue {
-				//fmt.Printf("DEFAUS: %+v\n", field)
 				if idx > 0 {
 					db.Statement.WriteByte(',')
 				}
@@ -112,20 +113,18 @@ func Create(db *gorm.DB) {
 			}
 			db.Statement.WriteString(" FROM ")
 			db.Statement.WriteQuoted(db.Statement.Table)
-			db.Statement.WriteString(" CHANGES(INFORMATION => DEFAULT) BEFORE(statement=>LAST_QUERY_ID());")
+			db.Statement.WriteString(" CHANGES(INFORMATION => APPEND_ONLY) BEFORE(statement=>LAST_QUERY_ID());")
 			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
-			db.RowsAffected = 0 // reset rows affected
+			reflectIndex := 0
 			if err == nil {
 				defer rows.Close()
 
 				switch db.Statement.ReflectValue.Kind() {
 				case reflect.Slice, reflect.Array:
-					c := db.Statement.Clauses["ON CONFLICT"]
-					onConflict, _ := c.Expression.(clause.OnConflict)
-
+					// the strategy here is to match the returned rows with INSERT only values
 					for rows.Next() {
 					BEGIN:
-						reflectValue := db.Statement.ReflectValue.Index(int(db.RowsAffected))
+						reflectValue := db.Statement.ReflectValue.Index(reflectIndex)
 						if reflect.Indirect(reflectValue).Kind() != reflect.Struct {
 							break
 						}
@@ -133,34 +132,29 @@ func Create(db *gorm.DB) {
 						for idx, field := range fields {
 							fieldValue := field.ReflectValueOf(reflectValue)
 
-							if onConflict.DoNothing && !fieldValue.IsZero() {
-								db.RowsAffected++
+							// skip where default are zeros (non-insert in MERGE)
+							if !fieldValue.IsZero() {
+								reflectIndex++
 
-								if int(db.RowsAffected) >= db.Statement.ReflectValue.Len() {
+								if reflectIndex >= db.Statement.ReflectValue.Len() {
 									return
 								}
 
 								goto BEGIN
 							}
-
 							values[idx] = fieldValue.Addr().Interface()
 						}
 
-						db.RowsAffected++
 						if err := rows.Scan(values...); err != nil {
 							_ = db.AddError(err)
 						}
 					}
 				case reflect.Struct:
-					//log.Println("ITS A STRUCT")
-					//log.Printf("FIELDS: %+v\n", fields)
-					//log.Printf("VALUES: %+v\n", values)
 					for idx, field := range fields {
 						values[idx] = field.ReflectValueOf(db.Statement.ReflectValue).Addr().Interface()
 					}
 
 					if rows.Next() {
-						db.RowsAffected++
 						db.AddError(rows.Scan(values...))
 					}
 				}
