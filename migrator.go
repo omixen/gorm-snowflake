@@ -160,33 +160,30 @@ func (m Migrator) HasTable(value interface{}) bool {
 
 // RenameTable no change
 func (m Migrator) RenameTable(oldName, newName interface{}) error {
-	var oldTable, newTable string
+	var oldTable, newTable interface{}
 	if v, ok := oldName.(string); ok {
-		oldTable = v
+		oldTable = clause.Table{Name: v}
 	} else {
 		stmt := &gorm.Statement{DB: m.DB}
 		if err := stmt.Parse(oldName); err == nil {
-			oldTable = stmt.Table
+			oldTable = m.CurrentTable(stmt)
 		} else {
 			return err
 		}
 	}
 
 	if v, ok := newName.(string); ok {
-		newTable = v
+		newTable = clause.Table{Name: v}
 	} else {
 		stmt := &gorm.Statement{DB: m.DB}
 		if err := stmt.Parse(newName); err == nil {
-			newTable = stmt.Table
+			newTable = m.CurrentTable(stmt)
 		} else {
 			return err
 		}
 	}
 
-	return m.DB.Exec(
-		"ALTER TABLE [ IF EXISTS ] <name> RENAME TO <new_table_name>",
-		clause.Table{Name: oldTable}, clause.Table{Name: newTable},
-	).Error
+	return m.DB.Exec("ALTER TABLE ? RENAME TO ?", oldTable, newTable).Error
 }
 
 // DropTable no change
@@ -240,22 +237,9 @@ func (m Migrator) AlterColumn(value interface{}, field string) error {
 	})
 }
 
-// RenameColumn TODO
+// RenameColumn not supported
 func (m Migrator) RenameColumn(value interface{}, oldName, newName string) error {
-	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		if field := stmt.Schema.LookUpField(oldName); field != nil {
-			oldName = field.DBName
-		}
-
-		if field := stmt.Schema.LookUpField(newName); field != nil {
-			newName = field.DBName
-		}
-
-		return m.DB.Exec(
-			"sp_rename @objname = ?, @newname = ?, @objtype = 'COLUMN';",
-			fmt.Sprintf("%s.%s", stmt.Table, oldName), clause.Column{Name: newName},
-		).Error
-	})
+	return fmt.Errorf("RENAME COLUMN UNSUPPORTED")
 }
 
 /*
@@ -416,6 +400,9 @@ func buildConstraint(constraint *schema.Constraint) (sql string, results []inter
 	if constraint.OnUpdate != "" {
 		sql += " ON UPDATE " + constraint.OnUpdate
 	}
+
+	// default enforce
+	sql += " ENFORCED"
 
 	var foreignKeys, references []interface{}
 	for _, field := range constraint.ForeignKeys {

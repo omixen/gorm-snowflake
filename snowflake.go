@@ -125,7 +125,7 @@ func (dialector Dialector) BindVarTo(writer clause.Writer, stmt *gorm.Statement,
 
 //no quotes, quotes cause everything needing quotes
 func (dialector Dialector) QuoteTo(writer clause.Writer, str string) {
-	writer.WriteString(str)
+	writer.WriteString(strings.ToLower(str))
 }
 
 func (dialector Dialector) Explain(sql string, vars ...interface{}) string {
