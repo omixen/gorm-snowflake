@@ -401,7 +401,7 @@ func buildConstraint(constraint *schema.Constraint) (sql string, results []inter
 		sql += " ON UPDATE " + constraint.OnUpdate
 	}
 
-	// default enforce
+	// default enforced, but not actually enforced except for NOT NULL
 	sql += " ENFORCED"
 
 	var foreignKeys, references []interface{}
