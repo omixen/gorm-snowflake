@@ -130,7 +130,7 @@ func Create(db *gorm.DB) {
 						}
 
 						for idx, field := range fields {
-							fieldValue := field.ReflectValueOf(reflectValue)
+							fieldValue := field.ReflectValueOf(db.Statement.Context, reflectValue)
 
 							// skip where default are zeros (non-insert in MERGE)
 							if !fieldValue.IsZero() {
@@ -151,7 +151,7 @@ func Create(db *gorm.DB) {
 					}
 				case reflect.Struct:
 					for idx, field := range fields {
-						values[idx] = field.ReflectValueOf(db.Statement.ReflectValue).Addr().Interface()
+						values[idx] = field.ReflectValueOf(db.Statement.Context, db.Statement.ReflectValue).Addr().Interface()
 					}
 
 					if rows.Next() {
