@@ -95,12 +95,12 @@ func (dialector Dialector) ClauseBuilders() map[string]clause.ClauseBuilder {
 					builder.WriteString(" ROWS")
 				}
 
-				if limit.Limit > 0 {
+				if limit.Limit != nil && *limit.Limit > 0 {
 					if limit.Offset == 0 {
 						builder.WriteString("OFFSET 0 ROW")
 					}
 					builder.WriteString(" FETCH NEXT ")
-					builder.WriteString(strconv.Itoa(limit.Limit))
+					builder.WriteString(strconv.Itoa(*limit.Limit))
 					builder.WriteString(" ROWS ONLY")
 				}
 			}
@@ -123,7 +123,7 @@ func (dialector Dialector) BindVarTo(writer clause.Writer, stmt *gorm.Statement,
 	writer.WriteByte('?')
 }
 
-//no quotes, quotes cause everything needing quotes
+// no quotes, quotes cause everything needing quotes
 func (dialector Dialector) QuoteTo(writer clause.Writer, str string) {
 	writer.WriteString(strings.ToLower(str))
 }
